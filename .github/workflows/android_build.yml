@@ -43,7 +43,7 @@ jobs:
           yes | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --licenses || yes | sdkmanager --licenses || true
 
       - name: Decode and Validate Release Keystore
-        if: "${{ secrets.KEYSTORE_BASE64 != '' }}"
+        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
         env:
           KEYSTORE_BASE64: "${{ secrets.KEYSTORE_BASE64 }}"
           STORE_PASSWORD: "${{ secrets.STORE_PASSWORD }}"
