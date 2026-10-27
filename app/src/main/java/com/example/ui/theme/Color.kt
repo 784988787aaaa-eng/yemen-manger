@@ -2,6 +2,9 @@ package com.example.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
+val AccentBlueColor = Color(0xFF2196F3)
+val HeaderCharcoalColor = Color(0xFF23272E)
+
 // Yemen Manager SRS Section 9 Design Tokens
 object YemenTokens {
     // Dark Theme Tokens (Primary Technical Workspace Identity)

@@ -85,7 +85,7 @@ class ExampleRobolectricTest {
         composeTestRule.onNodeWithTag("nav_settings").performClick()
         composeTestRule.waitForIdle()
         composeTestRule.onNodeWithTag("settings_and_capabilities_screen").assertIsDisplayed()
-        composeTestRule.onNodeWithTag("permissions_quick_banner", useUnmergedTree = true).assertExists()
+        composeTestRule.onNodeWithTag("permissions_quick_banner_card", useUnmergedTree = true).assertExists()
     }
 
     @Test

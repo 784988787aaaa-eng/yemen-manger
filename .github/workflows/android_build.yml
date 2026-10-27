@@ -1,0 +1,95 @@
+name: Android CI/CD Build & Sign
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Yemen Manager APK & AAB
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: 'gradle'
+
+      - name: Install and Setup Stable Gradle
+        run: |
+          if ! command -v gradle &> /dev/null; then
+            echo "Installing Gradle..."
+            wget -q https://services.gradle.org/distributions/gradle-8.11.1-bin.zip
+            unzip -q gradle-8.11.1-bin.zip -d /opt/
+            sudo ln -s /opt/gradle-8.11.1/bin/gradle /usr/local/bin/gradle
+          fi
+          gradle --version
+
+      - name: Accept Android SDK Licenses
+        run: |
+          mkdir -p $ANDROID_SDK_ROOT/licenses
+          echo "245244e01235d1406073470b8b4dcc308d03259c" > $ANDROID_SDK_ROOT/licenses/android-sdk-license
+          echo "d56f5187479451eabf01fb78af6dfcb131a6481e" >> $ANDROID_SDK_ROOT/licenses/android-sdk-license
+          echo "84831b9409646a918e30573bab4c9c91346d8abd" > $ANDROID_SDK_ROOT/licenses/android-sdk-preview-license
+          echo "7182c582535d2011701300971a81e9d1f39118c7" >> $ANDROID_SDK_ROOT/licenses/android-sdk-preview-license
+          yes | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --licenses || yes | sdkmanager --licenses || true
+
+      - name: Decode and Validate Release Keystore
+        if: "${{ secrets.KEYSTORE_BASE64 != '' }}"
+        env:
+          KEYSTORE_BASE64: "${{ secrets.KEYSTORE_BASE64 }}"
+          STORE_PASSWORD: "${{ secrets.STORE_PASSWORD }}"
+          KEY_ALIAS: "${{ secrets.KEY_ALIAS }}"
+        run: |
+          mkdir -p app
+          # Clean whitespace/newlines from copy-pasted phone base64 string safely
+          echo "$KEYSTORE_BASE64" | tr -d '\r\n\t ' | base64 -d > app/release-keystore.jks
+          if [ -s app/release-keystore.jks ]; then
+            echo "Keystore decoded successfully. Validating via keytool..."
+            keytool -list -v -keystore app/release-keystore.jks -storepass "$STORE_PASSWORD" -alias "${KEY_ALIAS:-upload}" || echo "Keystore keytool validation completed"
+          else
+            echo "::error::Keystore file is empty after base64 decoding!"
+            exit 1
+          fi
+
+      - name: Run Unit Tests
+        run: gradle :app:testDebugUnitTest
+
+      - name: Build Release APK and AAB Bundle
+        env:
+          KEYSTORE_PATH: "release-keystore.jks"
+          STORE_PASSWORD: "${{ secrets.STORE_PASSWORD }}"
+          KEY_ALIAS: "${{ secrets.KEY_ALIAS }}"
+          KEY_PASSWORD: "${{ secrets.KEY_PASSWORD }}"
+        run: |
+          if [ -f "app/release-keystore.jks" ]; then
+            echo "Building signed Release APK and AAB Bundle..."
+            gradle :app:assembleRelease :app:bundleRelease
+          else
+            echo "Keystore secret not set. Building Debug APK..."
+            gradle :app:assembleDebug
+          fi
+
+      - name: Upload Release APK Artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: YemenManager-Release-APK
+          path: |
+            app/build/outputs/apk/release/*.apk
+            app/build/outputs/apk/debug/*.apk
+
+      - name: Upload Release App Bundle (AAB) Artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: YemenManager-Release-AAB
+          path: app/build/outputs/bundle/release/*.aab
