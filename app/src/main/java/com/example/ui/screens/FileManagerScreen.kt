@@ -50,14 +50,13 @@ import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.Splitscreen
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -80,6 +79,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.core.i18n.AppStrings
+import com.example.core.i18n.AppStringsProvider
 import com.example.core.model.FileEntry
 import com.example.core.model.FileHashReport
 import com.example.data.local.BookmarkEntity
@@ -121,9 +121,9 @@ fun DualPaneFileManagerScreen(
     var apkFunctionResultMessage by remember { mutableStateOf<String?>(null) }
 
     val safDocumentLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
+        contract = ActivityResultContracts.OpenDocumentTree()
     ) { uri: Uri? ->
-        uri?.let { viewModel.registerSafUri(it.toString()) }
+        uri?.let { viewModel.openStorageLocation(viewModel.activePaneId.value, it) }
     }
 
     val activePane = if (activePaneId == "A") paneA else paneB
@@ -134,6 +134,9 @@ fun DualPaneFileManagerScreen(
             .fillMaxSize()
             .testTag("dual_pane_file_manager")
     ) {
+        if (paneA.isLoading || (isSplitDualPane && paneB.isLoading)) {
+            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+        }
         // Slim Contextual Multi-Selection Bar when files are checked
         if (selectedEntries.isNotEmpty()) {
             Surface(
@@ -246,6 +249,10 @@ fun DualPaneFileManagerScreen(
                             viewModel.selectSingleEntry("A", entry.uriOrPath)
                             contextMenuEntry = entry
                         },
+                        onChooseFolder = {
+                            viewModel.setActivePane("A")
+                            safDocumentLauncher.launch(null)
+                        },
                         modifier = Modifier.weight(1f).fillMaxHeight()
                     )
 
@@ -274,6 +281,10 @@ fun DualPaneFileManagerScreen(
                             viewModel.selectSingleEntry("B", entry.uriOrPath)
                             contextMenuEntry = entry
                         },
+                        onChooseFolder = {
+                            viewModel.setActivePane("B")
+                            safDocumentLauncher.launch(null)
+                        },
                         modifier = Modifier.weight(1f).fillMaxHeight()
                     )
                 }
@@ -297,58 +308,13 @@ fun DualPaneFileManagerScreen(
                         viewModel.selectSingleEntry(activePane.paneId, entry.uriOrPath)
                         contextMenuEntry = entry
                     },
+                    onChooseFolder = {
+                        viewModel.setActivePane(activePane.paneId)
+                        safDocumentLauncher.launch(null)
+                    },
                     modifier = Modifier.fillMaxSize()
                 )
             }
-        }
-
-        // Hidden/Compact Test-Tag Accessibility Bar for Automated Tests + Quick Actions
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(1.dp)
-                .horizontalScroll(rememberScrollState()),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            FilterChip(
-                selected = activePaneId == "A",
-                onClick = { viewModel.setActivePane("A") },
-                label = { Text("A") },
-                modifier = Modifier.testTag("select_pane_a_chip")
-            )
-            FilterChip(
-                selected = activePaneId == "B",
-                onClick = { viewModel.setActivePane("B") },
-                label = { Text("B") },
-                modifier = Modifier.testTag("select_pane_b_chip")
-            )
-            AssistChip(
-                onClick = { viewModel.toggleSplitDualPane() },
-                label = { Text("Split") },
-                leadingIcon = { Icon(Icons.Default.Splitscreen, contentDescription = null) },
-                modifier = Modifier.testTag("toggle_split_view_chip")
-            )
-            AssistChip(
-                onClick = { showNewFolderDialog = true },
-                label = { Text(strings.newFolder) },
-                modifier = Modifier.testTag("new_folder_button")
-            )
-            AssistChip(
-                onClick = { safDocumentLauncher.launch(arrayOf("*/*")) },
-                label = { Text("SAF") },
-                modifier = Modifier.testTag("mount_saf_button")
-            )
-            AssistChip(
-                onClick = {
-                    val leftSel = paneA.selectedPaths.firstOrNull() ?: paneA.entries.firstOrNull { !it.isDirectory }?.uriOrPath
-                    val rightSel = paneB.selectedPaths.firstOrNull() ?: paneB.entries.firstOrNull { !it.isDirectory }?.uriOrPath
-                    if (leftSel != null && rightSel != null) {
-                        viewModel.compareFiles(leftSel, rightSel, switchScreen = true)
-                    }
-                },
-                label = { Text("Diff") },
-                modifier = Modifier.testTag("compare_panes_button")
-            )
         }
 
         HorizontalDivider(
@@ -431,78 +397,40 @@ fun DualPaneFileManagerScreen(
 
     // --- Dialogs ---
 
-    // 1. "+" Bottom Bar Quick Create Dialog
+    // 1. Minimal quick-create dialog: one name field and FILE / FOLDER actions.
     if (showCreateMenuDialog) {
+        var itemName by remember { mutableStateOf("") }
         AlertDialog(
             onDismissRequest = { showCreateMenuDialog = false },
-            title = { Text(if (strings.isArabic) "إنشاء أو ربط جديد" else "Create / Mount") },
+            title = { Text(if (strings.isArabic) "إنشاء" else "Create", fontWeight = FontWeight.Bold) },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                showCreateMenuDialog = false
-                                showNewFolderDialog = true
-                            }
-                            .padding(vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(Icons.Default.CreateNewFolder, contentDescription = null, tint = AccentBlueColor)
-                        Spacer(Modifier.width(12.dp))
-                        Text(strings.newFolder, fontSize = 15.sp)
+                OutlinedTextField(
+                    value = itemName,
+                    onValueChange = { itemName = it },
+                    singleLine = true,
+                    placeholder = { Text(if (strings.isArabic) "اسم الملف أو المجلد" else "File or folder name") },
+                    modifier = Modifier.fillMaxWidth().testTag("quick_create_name_input")
+                )
+            },
+            confirmButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(onClick = {
+                        if (itemName.isNotBlank()) viewModel.createNewFileInActivePane(itemName.trim(), "")
+                        showCreateMenuDialog = false
+                    }, enabled = itemName.isNotBlank()) {
+                        Text(if (strings.isArabic) "ملف" else "FILE", color = AccentBlueColor)
                     }
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                showCreateMenuDialog = false
-                                showNewFileDialog = true
-                            }
-                            .padding(vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(Icons.Default.Description, contentDescription = null, tint = AccentBlueColor)
-                        Spacer(Modifier.width(12.dp))
-                        Text(strings.newFile, fontSize = 15.sp)
-                    }
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                showCreateMenuDialog = false
-                                safDocumentLauncher.launch(arrayOf("*/*"))
-                            }
-                            .padding(vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(Icons.Default.FolderOpen, contentDescription = null, tint = AccentBlueColor)
-                        Spacer(Modifier.width(12.dp))
-                        Text(strings.mountSafFolder, fontSize = 15.sp)
-                    }
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                showCreateMenuDialog = false
-                                val leftSel = paneA.selectedPaths.firstOrNull() ?: paneA.entries.firstOrNull { !it.isDirectory }?.uriOrPath
-                                val rightSel = paneB.selectedPaths.firstOrNull() ?: paneB.entries.firstOrNull { !it.isDirectory }?.uriOrPath
-                                if (leftSel != null && rightSel != null) {
-                                    viewModel.compareFiles(leftSel, rightSel, switchScreen = true)
-                                }
-                            }
-                            .padding(vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(Icons.AutoMirrored.Filled.CompareArrows, contentDescription = null, tint = AccentBlueColor)
-                        Spacer(Modifier.width(12.dp))
-                        Text(strings.compareInDiff, fontSize = 15.sp)
+                    TextButton(onClick = {
+                        if (itemName.isNotBlank()) viewModel.createFolderInActivePane(itemName.trim())
+                        showCreateMenuDialog = false
+                    }, enabled = itemName.isNotBlank()) {
+                        Text(if (strings.isArabic) "مجلد" else "FOLDER", color = AccentBlueColor)
                     }
                 }
             },
-            confirmButton = {
+            dismissButton = {
                 TextButton(onClick = { showCreateMenuDialog = false }) {
-                    Text(strings.confirmCancel, color = AccentBlueColor)
+                    Text(if (strings.isArabic) "إلغاء" else "CANCEL", color = AccentBlueColor)
                 }
             }
         )
@@ -772,7 +700,8 @@ fun DualPaneFileManagerScreen(
                     }
                     else -> viewModel.openFileInTextEditor(entry.uriOrPath)
                 }
-            }
+            },
+            onOpenExternalApp = { viewModel.openFileWithExternalApp(entry.uriOrPath) }
         )
     }
 
@@ -914,6 +843,7 @@ private fun CompactPaneColumn(
     viewModel: YemenManagerViewModel,
     onOpenEntry: (FileEntry) -> Unit,
     onLongPressEntry: (FileEntry) -> Unit,
+    onChooseFolder: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     // Active pane is bright white (#FFFFFF in light mode, #1F242B in dark mode);
@@ -966,6 +896,31 @@ private fun CompactPaneColumn(
                 fontSize = 11.sp,
                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
             )
+        }
+
+        if (pane.entries.isEmpty()) {
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text(
+                    text = when {
+                        pane.currentPath.isEmpty() || pane.errorBanner != null ->
+                            if (strings.isArabic) "اختر مجلدًا حقيقيًا للوصول إلى ملفاته" else "Choose a real folder to access its files"
+                        else -> if (strings.isArabic) "المجلد فارغ" else "This folder is empty"
+                    },
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 12.sp
+                )
+                if (pane.currentPath.isEmpty() || pane.errorBanner != null) {
+                    OutlinedButton(onClick = onChooseFolder) {
+                        Icon(Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text(if (strings.isArabic) "اختيار مجلد من الجهاز" else "Choose device folder")
+                    }
+                }
+            }
         }
 
         LazyColumn(

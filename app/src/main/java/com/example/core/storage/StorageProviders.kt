@@ -577,6 +577,68 @@ class SafStorageProvider(private val context: Context) {
         }
     }
 
+    /** Lists a SAF document directory (including a tree URI selected with ACTION_OPEN_DOCUMENT_TREE). */
+    fun list(uriString: String): AppResult<List<FileEntry>> {
+        if (!isSafUri(uriString)) return AppResult.Failure(DomainError.ValidationFailed("Expected content:// URI"))
+        return try {
+            val uri = Uri.parse(uriString)
+            val treeId = if (DocumentsContract.isTreeUri(uri) && !DocumentsContract.isDocumentUri(context, uri)) DocumentsContract.getTreeDocumentId(uri) else DocumentsContract.getDocumentId(uri)
+            val childrenUri = if (DocumentsContract.isTreeUri(uri)) {
+                DocumentsContract.buildChildDocumentsUriUsingTree(uri, treeId)
+            } else {
+                DocumentsContract.buildChildDocumentsUri(uri.authority!!, treeId)
+            }
+            val result = mutableListOf<FileEntry>()
+            context.contentResolver.query(childrenUri, arrayOf(
+                DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                DocumentsContract.Document.COLUMN_MIME_TYPE,
+                DocumentsContract.Document.COLUMN_SIZE,
+                DocumentsContract.Document.COLUMN_LAST_MODIFIED,
+                DocumentsContract.Document.COLUMN_FLAGS
+            ), null, null, "${DocumentsContract.Document.COLUMN_DISPLAY_NAME} COLLATE NOCASE ASC")?.use { cursor ->
+                val idCol = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                val nameCol = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                val mimeCol = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_MIME_TYPE)
+                val sizeCol = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_SIZE)
+                val modifiedCol = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_LAST_MODIFIED)
+                val flagsCol = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_FLAGS)
+                while (cursor.moveToNext()) {
+                    val id = cursor.getString(idCol)
+                    val name = cursor.getString(nameCol) ?: ""
+                    val mime = cursor.getString(mimeCol) ?: "application/octet-stream"
+                    val isDir = mime == DocumentsContract.Document.MIME_TYPE_DIR
+                    val child = DocumentsContract.buildDocumentUriUsingTree(uri, id)
+                    val flags = if (flagsCol >= 0) cursor.getInt(flagsCol) else 0
+                    result += FileEntry(child.toString(), name, isDir,
+                        if (sizeCol >= 0 && !cursor.isNull(sizeCol)) cursor.getLong(sizeCol) else 0L,
+                        if (modifiedCol >= 0 && !cursor.isNull(modifiedCol)) cursor.getLong(modifiedCol) else 0L,
+                        name.substringAfterLast('.', "").lowercase(), mime,
+                        true, flags and DocumentsContract.Document.FLAG_SUPPORTS_WRITE != 0,
+                        StorageProviderType.SAF_URI)
+                }
+            } ?: return AppResult.Failure(DomainError.IoFailure("Document provider returned no cursor"))
+            AppResult.Success(result)
+        } catch (se: SecurityException) {
+            AppResult.Failure(DomainError.PermissionDenied(se.message ?: uriString))
+        } catch (e: Exception) {
+            AppResult.Failure(DomainError.IoFailure(e.message ?: uriString))
+        }
+    }
+
+    fun parentUri(uriString: String): String? = try {
+        val uri = Uri.parse(uriString)
+        if (!DocumentsContract.isTreeUri(uri)) null else {
+            val rootId = DocumentsContract.getTreeDocumentId(uri)
+            val currentId = if (DocumentsContract.isDocumentUri(context, uri)) DocumentsContract.getDocumentId(uri) else rootId
+            if (currentId == rootId) null else {
+                val parentId = currentId.substringBeforeLast('/', "")
+                if (parentId.isEmpty() || !parentId.startsWith(rootId.substringBefore(':') + ":")) null
+                else DocumentsContract.buildDocumentUriUsingTree(uri, parentId).toString()
+            }
+        }
+    } catch (_: Exception) { null }
+
     fun openInputStream(uriString: String): AppResult<InputStream> {
         return try {
             val stream = context.contentResolver.openInputStream(Uri.parse(uriString))

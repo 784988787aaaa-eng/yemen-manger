@@ -3,7 +3,7 @@ package com.example.engines.apk
 import com.example.core.model.AppResult
 import com.example.core.model.DomainError
 import com.example.core.storage.LocalFileStorageProvider.Companion.toHex
-import com.example.core.storage.WorkspaceSeeder
+import com.example.core.storage.BinaryAxmlBuilder
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
@@ -14,7 +14,7 @@ import java.nio.ByteOrder
 import java.security.KeyPairGenerator
 import java.security.MessageDigest
 import java.security.Signature
-import java.util.Base64
+import android.util.Base64
 import java.util.zip.Adler32
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
@@ -228,7 +228,7 @@ class ApkLabEngine {
         val tempApk = File(parentDir, ".${outApk.name}.tmp")
 
         return try {
-            val updatedAxml = WorkspaceSeeder.buildValidMinimalAxml(
+            val updatedAxml = BinaryAxmlBuilder.buildValidMinimalAxml(
                 packageName = baseReport.manifestInfo.packageName,
                 versionName = newVersionName.ifBlank { baseReport.manifestInfo.versionName },
                 versionCode = newVersionCode.coerceAtLeast(1),
@@ -248,7 +248,7 @@ class ApkLabEngine {
                         zos.write(bytes)
                         zos.closeEntry()
                         val sha = MessageDigest.getInstance("SHA-256").digest(bytes)
-                        entryDigests[name] = Base64.getEncoder().encodeToString(sha)
+                        entryDigests[name] = Base64.encodeToString(sha, Base64.NO_WRAP)
                     }
 
                     // Write updated AndroidManifest.xml
@@ -291,7 +291,7 @@ class ApkLabEngine {
                     zos.closeEntry()
 
                     // Build META-INF/CERT.SF
-                    val mfSha = Base64.getEncoder().encodeToString(MessageDigest.getInstance("SHA-256").digest(mfBytes))
+                    val mfSha = Base64.encodeToString(MessageDigest.getInstance("SHA-256").digest(mfBytes), Base64.NO_WRAP)
                     val sfText = "Signature-Version: 1.0\r\nCreated-By: Yemen-Manager-Local-Signer\r\nSHA-256-Digest-Manifest: $mfSha\r\n\r\n"
                     val sfBytes = sfText.toByteArray(Charsets.UTF_8)
                     zos.putNextEntry(ZipEntry("META-INF/CERT.SF"))

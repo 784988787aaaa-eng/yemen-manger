@@ -213,7 +213,8 @@ fun OpenWithColorfulGridDialog(
     entry: FileEntry,
     strings: AppStrings,
     onDismiss: () -> Unit,
-    onSelectTool: (String) -> Unit
+    onSelectTool: (String) -> Unit,
+    onOpenExternalApp: () -> Unit
 ) {
     val tools = listOf(
         OpenWithToolItem("text_editor", "محرر النصوص", "Text editor", Color(0xFF4A89DC), icon = Icons.Default.Description),
@@ -325,6 +326,18 @@ fun OpenWithColorfulGridDialog(
                             }
                         }
                     }
+                }
+                Spacer(Modifier.height(8.dp))
+                androidx.compose.material3.OutlinedButton(
+                    onClick = {
+                        onDismiss()
+                        onOpenExternalApp()
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Default.OpenInNew, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(if (strings.isArabic) "فتح باستخدام تطبيق مثبت" else "Open with an installed app")
                 }
             }
         }

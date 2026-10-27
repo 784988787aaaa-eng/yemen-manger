@@ -10,7 +10,6 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,24 +23,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Android
-import androidx.compose.material.icons.filled.Apps
-import androidx.compose.material.icons.filled.Archive
-import androidx.compose.material.icons.filled.Checklist
-import androidx.compose.material.icons.filled.DarkMode
-import androidx.compose.material.icons.filled.EditNote
-import androidx.compose.material.icons.filled.FolderCopy
-import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Security
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Badge
-import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -68,7 +54,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -77,7 +62,6 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.core.i18n.AppStringsProvider
-import com.example.core.model.OperationStatus
 import com.example.core.model.SortField
 import com.example.engines.editor.SupportedEncoding
 import com.example.ui.screens.AccentBlueColor
@@ -109,13 +93,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 }
-
-private data class NavDestination(
-    val section: MainSection,
-    val label: String,
-    val icon: ImageVector,
-    val testTag: String
-)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -167,13 +144,15 @@ fun YemenManagerApp(viewModel: YemenManagerViewModel) {
 
     var showTopOverflowMenu by remember { mutableStateOf(false) }
     var showSearchDialog by remember { mutableStateOf(false) }
+    var showPathDialog by remember { mutableStateOf(false) }
+    var editablePath by remember { mutableStateOf("") }
     var showSortDialog by remember { mutableStateOf(false) }
     var showCharsetDialog by remember { mutableStateOf(false) }
 
     val safDocumentLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
+        contract = ActivityResultContracts.OpenDocumentTree()
     ) { uri: Uri? ->
-        uri?.let { viewModel.registerSafUri(it.toString()) }
+        uri?.let { viewModel.openStorageLocation(viewModel.activePaneId.value, it) }
     }
 
     LaunchedEffect(statusToast) {
@@ -193,19 +172,7 @@ fun YemenManagerApp(viewModel: YemenManagerViewModel) {
         }
     }
 
-    val runningTaskCount = tasks.count { it.status == OperationStatus.RUNNING || it.status == OperationStatus.QUEUED }
-
     YemenManagerTheme(darkTheme = isDarkTheme, isArabicRtl = isArabicRtl) {
-        val navItems = listOf(
-            NavDestination(MainSection.FILES, strings.navFileManager, Icons.Default.FolderCopy, "nav_files"),
-            NavDestination(MainSection.EDITORS, strings.navEditorsDiff, Icons.Default.EditNote, "nav_editors"),
-            NavDestination(MainSection.ARCHIVES, strings.navArchiveLab, Icons.Default.Archive, "nav_archives"),
-            NavDestination(MainSection.APK_LAB, strings.navApkLab, Icons.Default.Android, "nav_apk_lab"),
-            NavDestination(MainSection.INSTALLED_APPS, strings.navInstalledApps, Icons.Default.Apps, "nav_installed_apps"),
-            NavDestination(MainSection.TASKS, strings.navTasks, Icons.Default.Checklist, "nav_tasks"),
-            NavDestination(MainSection.SETTINGS, strings.navSettings, Icons.Default.Settings, "nav_settings")
-        )
-
         ModalNavigationDrawer(
             drawerState = drawerState,
             drawerContent = {
@@ -220,7 +187,7 @@ fun YemenManagerApp(viewModel: YemenManagerViewModel) {
                         coroutineScope.launch { drawerState.close() }
                     },
                     onRequestMountSaf = {
-                        safDocumentLauncher.launch(arrayOf("*/*"))
+                        safDocumentLauncher.launch(null)
                     }
                 )
             }
@@ -274,7 +241,8 @@ fun YemenManagerApp(viewModel: YemenManagerViewModel) {
                                         .padding(horizontal = 4.dp)
                                         .clickable {
                                             if (currentSection == MainSection.FILES) {
-                                                showSearchDialog = true
+                                                editablePath = activePane.displayPath
+                                                showPathDialog = true
                                             }
                                         }
                                         .testTag("app_title_text")
@@ -317,40 +285,7 @@ fun YemenManagerApp(viewModel: YemenManagerViewModel) {
                                     )
                                 }
 
-                                // Right Actions: Permissions/Battery Center + Language Toggle + Theme Toggle + 3-Dots Overflow Menu
-                                IconButton(
-                                    onClick = { viewModel.openPermissionsCenterDialog() },
-                                    modifier = Modifier.size(34.dp).testTag("top_bar_permissions_button")
-                                ) {
-                                    Icon(
-                                        Icons.Default.Security,
-                                        contentDescription = "Permissions & Battery",
-                                        tint = if (permissionsSnapshot.allCriticalGranted) Color(0xFF66BB6A) else AccentBlueColor,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                }
-                                IconButton(
-                                    onClick = { viewModel.toggleLanguage() },
-                                    modifier = Modifier.size(34.dp).testTag("top_bar_language_toggle")
-                                ) {
-                                    Icon(
-                                        Icons.Default.Language,
-                                        contentDescription = strings.languageToggleLabel,
-                                        tint = Color.White,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                }
-                                IconButton(
-                                    onClick = { viewModel.toggleTheme() },
-                                    modifier = Modifier.size(34.dp).testTag("top_bar_theme_toggle")
-                                ) {
-                                    Icon(
-                                        Icons.Default.DarkMode,
-                                        contentDescription = strings.themeToggleLabel,
-                                        tint = Color.White,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                }
+                                // Keep the file-manager header minimal: path and overflow only.
                                 Box {
                                     IconButton(
                                         onClick = { showTopOverflowMenu = true },
@@ -377,56 +312,7 @@ fun YemenManagerApp(viewModel: YemenManagerViewModel) {
                                 }
                             }
 
-                            // Compact Quick-Navigation Strip for fast switching & full test compatibility
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .background(Color(0xFF1E2024))
-                                    .horizontalScroll(rememberScrollState())
-                                    .padding(horizontal = 6.dp, vertical = 2.dp)
-                                    .testTag("main_bottom_navigation"),
-                                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                navItems.forEach { dest ->
-                                    val selected = currentSection == dest.section
-                                    Row(
-                                        modifier = Modifier
-                                            .clickable { viewModel.selectSection(dest.section) }
-                                            .background(
-                                                if (selected) AccentBlueColor.copy(alpha = 0.22f) else Color.Transparent
-                                            )
-                                            .padding(horizontal = 8.dp, vertical = 4.dp)
-                                            .testTag(dest.testTag),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        if (dest.section == MainSection.TASKS && runningTaskCount > 0) {
-                                            BadgedBox(badge = { Badge { Text("$runningTaskCount") } }) {
-                                                Icon(
-                                                    dest.icon,
-                                                    contentDescription = dest.label,
-                                                    tint = if (selected) AccentBlueColor else Color(0xFFB8BDC4),
-                                                    modifier = Modifier.size(14.dp)
-                                                )
-                                            }
-                                        } else {
-                                            Icon(
-                                                dest.icon,
-                                                contentDescription = dest.label,
-                                                tint = if (selected) AccentBlueColor else Color(0xFFB8BDC4),
-                                                modifier = Modifier.size(14.dp)
-                                            )
-                                        }
-                                        Spacer(Modifier.width(4.dp))
-                                        Text(
-                                            text = dest.label,
-                                            fontSize = 11.sp,
-                                            color = if (selected) Color.White else Color(0xFFB8BDC4),
-                                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
-                                        )
-                                    }
-                                }
-                            }
+
                         }
                     }
                 }
@@ -534,7 +420,36 @@ fun YemenManagerApp(viewModel: YemenManagerViewModel) {
             )
         }
 
-        // Search / Filter Dialog triggered from Top Bar or Overflow Menu
+        // Tap the current path to edit it and navigate directly.
+        if (showPathDialog) {
+            AlertDialog(
+                onDismissRequest = { showPathDialog = false },
+                title = { Text(if (isArabicRtl) "الانتقال إلى المسار" else "Go to path") },
+                text = {
+                    OutlinedTextField(
+                        value = editablePath,
+                        onValueChange = { editablePath = it },
+                        singleLine = true,
+                        placeholder = { Text(if (isArabicRtl) "أدخل المسار" else "Enter path") },
+                        modifier = Modifier.fillMaxWidth().testTag("path_navigation_input")
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        val target = editablePath.trim()
+                        if (target.isNotEmpty()) viewModel.navigatePane(activePaneId, target)
+                        showPathDialog = false
+                    }) { Text(if (isArabicRtl) "انتقال" else "GO", color = AccentBlueColor) }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showPathDialog = false }) {
+                        Text(if (isArabicRtl) "إلغاء" else "CANCEL", color = AccentBlueColor)
+                    }
+                }
+            )
+        }
+
+        // Search / Filter Dialog triggered from Overflow Menu
         if (showSearchDialog) {
             var query by remember(activePane.searchQuery) { mutableStateOf(activePane.searchQuery) }
             AlertDialog(

@@ -15,7 +15,7 @@
 ## 2. بنية الحزم والوحدات داخل المستودع
 - `com.example.core.model`: نماذج المجال، الأخطاء الموحدة (`DomainError`)، حالات العمليات (`OperationStatus`)، ومصفوفة القدرات (`CapabilityState`).
 - `com.example.core.i18n`: حزمة الترجمة الفورية للعربية (`RTL`) والإنجليزية (`LTR`).
-- `com.example.core.storage`: واجهة `StorageProvider`، ومزود الملفات المحلية (`LocalFileStorageProvider`)، ومزود `SafStorageProvider`، ومولّد ملفات الاختبار القياسية (`WorkspaceSeeder`).
+- `com.example.core.storage`: واجهة `StorageProvider`، ومزود الملفات المحلية (`LocalFileStorageProvider`)، ومزود `SafStorageProvider`، وباني بيانات AXML الثنائية اللازمة لإعادة بناء APK (`BinaryAxmlBuilder`).
 - `com.example.core.tasks`: محرك العمليات غير المتزامنة (`TaskCenterEngine`) مع التقدم والإلغاء التعاوني.
 - `com.example.data.local`: قاعدة بيانات `Room` (`YemenDatabase`) لحفظ المفضلة، وسجل المسارات، وسجل العمليات، ومسودات المحرر.
 - `com.example.engines.editor`: محرك النصوص (`TextEditorEngine`) مع `BoundedUndoRedoStack`، ومحرك `HexEngine` بنافذة 256 بايت، ومحرك المقارنة (`DiffEngine`).

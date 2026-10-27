@@ -1,6 +1,7 @@
 package com.example.ui.viewmodel
 
 import android.app.Application
+import android.net.Uri
 import android.os.Environment
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -17,7 +18,6 @@ import com.example.core.model.SortConfig
 import com.example.core.model.SortField
 import com.example.core.storage.LocalFileStorageProvider
 import com.example.core.storage.SafStorageProvider
-import com.example.core.storage.WorkspaceSeeder
 import com.example.core.tasks.TaskCenterEngine
 import com.example.data.local.BookmarkEntity
 import com.example.data.local.EditorDraftEntity
@@ -67,6 +67,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.withContext
 import java.io.File
 
 enum class MainSection {
@@ -131,13 +133,15 @@ data class FilePaneState(
     val paneId: String,
     val currentPath: String,
     val entries: List<FileEntry> = emptyList(),
+    val allEntries: List<FileEntry> = emptyList(),
     val selectedPaths: Set<String> = emptySet(),
     val searchQuery: String = "",
     val sortConfig: SortConfig = SortConfig(),
     val navigationBackstack: List<String> = emptyList(),
     val forwardStack: List<String> = emptyList(),
     val highlightedPath: String? = null,
-    val errorBanner: String? = null
+    val errorBanner: String? = null,
+    val isLoading: Boolean = false
 ) {
     val isVirtualArchive: Boolean
         get() = VirtualArchiveBrowserEngine.isVirtualPath(currentPath)
@@ -230,12 +234,12 @@ class YemenManagerViewModel(application: Application) : AndroidViewModel(applica
 
     // Storage Volume Stats
     private val _rootVolumeStats = MutableStateFlow(
-        StorageStatsHelper.queryVolumeStats(Environment.getRootDirectory(), "مجلد الجذر", "Root Directory")
+        DiskVolumeStats("مجلد الجذر", "Root Directory", Environment.getRootDirectory().absolutePath, 0L, 0L, 0L)
     )
     val rootVolumeStats: StateFlow<DiskVolumeStats> = _rootVolumeStats.asStateFlow()
 
     private val _storageVolumeStats = MutableStateFlow(
-        StorageStatsHelper.queryVolumeStats(workspaceRoot, "ذاكرة التخزين", "Storage Directory")
+        DiskVolumeStats("ذاكرة التخزين", "Storage Directory", workspaceRoot.absolutePath, 0L, 0L, 0L)
     )
     val storageVolumeStats: StateFlow<DiskVolumeStats> = _storageVolumeStats.asStateFlow()
 
@@ -341,39 +345,46 @@ class YemenManagerViewModel(application: Application) : AndroidViewModel(applica
     val editorDrafts: StateFlow<List<EditorDraftEntity>> = dao.observeDrafts()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    private var paneALoadJob: Job? = null
+    private var paneBLoadJob: Job? = null
+
     init {
-        initializeWorkspaceAndFixtures()
+        // Keep first-frame work minimal. File enumeration, disk statistics, trash scanning,
+        // and capability probing are deferred to background dispatchers.
+        val sharedRoot = Environment.getExternalStorageDirectory().absolutePath
+        val downloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+        navigatePane("A", sharedRoot, recordHistory = false)
+        navigatePane("B", if (downloads.isDirectory && downloads.canRead()) downloads.absolutePath else sharedRoot, recordHistory = false)
+        viewModelScope.launch(Dispatchers.IO) {
+            val trash = localProvider.list(trashDir.absolutePath)
+            withContext(Dispatchers.Main) {
+                _trashEntries.value = (trash as? AppResult.Success)?.data ?: emptyList()
+            }
+            val rootStats = StorageStatsHelper.queryVolumeStats(Environment.getRootDirectory(), "مجلد الجذر", "Root Directory")
+            val storageStats = StorageStatsHelper.queryVolumeStats(workspaceRoot, "ذاكرة التخزين", "Storage Directory")
+            val capabilities = privilegeProber.probeAllProviders()
+            val lanState = lanServer.getState()
+            withContext(Dispatchers.Main) {
+                _rootVolumeStats.value = rootStats
+                _storageVolumeStats.value = storageStats
+                _privilegeStatuses.value = capabilities
+                _lanServerState.value = lanState
+                refreshPermissionsSnapshot()
+            }
+        }
     }
 
     fun strings(): AppStrings = if (_isArabicRtl.value) AppStringsProvider.Arabic else AppStringsProvider.English
 
-    fun initializeWorkspaceAndFixtures() {
-        val (dirA, dirB) = WorkspaceSeeder.ensureSeeded(workspaceRoot)
-        _terminalWorkingDir.value = dirA
-        navigatePane("A", dirA.absolutePath, recordHistory = false)
-        navigatePane("B", dirB.absolutePath, recordHistory = false)
-
-        val readmeFile = File(dirA, "مرحبا_يمن_مانجر.txt")
-        if (readmeFile.exists()) openFileInTextEditor(readmeFile.absolutePath, switchScreen = false)
-
-        val binFile = File(dirA, "firmware_header.bin")
-        if (binFile.exists()) openFileInHexEditor(binFile.absolutePath, switchScreen = false)
-
-        val cfg1 = File(dirA, "app_config_v1.json")
-        val cfg2 = File(dirB, "app_config_v2.json")
-        if (cfg1.exists() && cfg2.exists()) compareFiles(cfg1.absolutePath, cfg2.absolutePath, switchScreen = false)
-
-        val zipFile = File(dirA, "project_bundle.zip")
-        if (zipFile.exists()) inspectZipArchive(zipFile.absolutePath, switchScreen = false)
-
-        val apkFile = File(dirA, "sample_yemen_tool_v1.apk")
-        if (apkFile.exists()) analyzeApkFile(apkFile.absolutePath, switchScreen = false)
-
-        refreshTrashEntries()
-        _signingKeys.value = signingKeyManager.listOrSeedKeys()
-        refreshStorageVolumeStats()
-        refreshSystemCapabilities()
-        refreshPermissionsSnapshot()
+    fun openStorageLocation(paneId: String, uri: Uri) {
+        try {
+            val flags = android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            getApplication<Application>().contentResolver.takePersistableUriPermission(uri, flags)
+        } catch (_: Exception) { /* Some document providers grant only transient access. */ }
+        viewModelScope.launch(Dispatchers.IO) {
+            dao.upsertBookmark(BookmarkEntity(pathOrUri = uri.toString(), title = "SAF: ${uri.lastPathSegment ?: "Folder"}", providerType = "SAF_TREE"))
+            kotlinx.coroutines.withContext(Dispatchers.Main) { navigatePane(paneId, uri.toString(), recordHistory = false) }
+        }
     }
 
     fun refreshPermissionsSnapshot() {
@@ -412,6 +423,45 @@ class YemenManagerViewModel(application: Application) : AndroidViewModel(applica
         }
     }
 
+    /** Opens a real file with an installed Android app using the system chooser. */
+    fun openFileWithExternalApp(uriOrPath: String) {
+        val context = getApplication<Application>()
+        try {
+            val resolved = resolveVirtualOrRealFilePath(uriOrPath)
+            val contentUri = if (safProvider.isSafUri(resolved)) {
+                Uri.parse(resolved)
+            } else {
+                androidx.core.content.FileProvider.getUriForFile(
+                    context,
+                    "${context.packageName}.fileprovider",
+                    File(resolved)
+                )
+            }
+            val mimeType = if (safProvider.isSafUri(resolved)) {
+                context.contentResolver.getType(contentUri)
+            } else {
+                android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(
+                    File(resolved).extension.lowercase()
+                )
+            } ?: "*/*"
+            val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                setDataAndType(contentUri, mimeType)
+                addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            val chooser = android.content.Intent.createChooser(
+                intent,
+                if (_isArabicRtl.value) "فتح باستخدام" else "Open with"
+            ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(chooser)
+        } catch (e: Exception) {
+            _statusToast.value = if (_isArabicRtl.value) {
+                "تعذر فتح الملف بتطبيق خارجي: ${e.localizedMessage ?: "خطأ غير معروف"}"
+            } else {
+                "Could not open file in another app: ${e.localizedMessage ?: "unknown error"}"
+            }
+        }
+    }
+
     fun exportLocalSettingsBackup() {
         val backupFile = File(workspaceRoot, "yemen_manager_backup.json")
         val json = preferencesRepository.exportPreferencesToJson(_preferences.value)
@@ -445,16 +495,18 @@ class YemenManagerViewModel(application: Application) : AndroidViewModel(applica
     }
 
     fun refreshStorageVolumeStats() {
-        _rootVolumeStats.value = StorageStatsHelper.queryVolumeStats(
-            Environment.getRootDirectory(),
-            "مجلد الجذر",
-            "Root Directory"
-        )
-        _storageVolumeStats.value = StorageStatsHelper.queryVolumeStats(
-            workspaceRoot,
-            "ذاكرة التخزين",
-            "Storage Directory"
-        )
+        viewModelScope.launch(Dispatchers.IO) {
+            val root = StorageStatsHelper.queryVolumeStats(
+                Environment.getRootDirectory(), "مجلد الجذر", "Root Directory"
+            )
+            val storage = StorageStatsHelper.queryVolumeStats(
+                workspaceRoot, "ذاكرة التخزين", "Storage Directory"
+            )
+            withContext(Dispatchers.Main) {
+                _rootVolumeStats.value = root
+                _storageVolumeStats.value = storage
+            }
+        }
     }
 
     fun toggleLanguage() {
@@ -559,41 +611,53 @@ class YemenManagerViewModel(application: Application) : AndroidViewModel(applica
     fun navigatePane(paneId: String, targetPath: String, recordHistory: Boolean = true, clearForward: Boolean = true) {
         val stateFlow = if (paneId == "A") _paneA else _paneB
         val current = stateFlow.value
-        val listResult = if (VirtualArchiveBrowserEngine.isVirtualPath(targetPath)) {
-            VirtualArchiveBrowserEngine.listVirtualDirectory(targetPath)
-        } else {
-            localProvider.list(targetPath)
-        }
-
-        when (listResult) {
-            is AppResult.Success -> {
-                val sorted = filterAndSort(listResult.data, current.searchQuery, current.sortConfig)
-                val updatedStack = if (recordHistory && current.currentPath.isNotEmpty() && current.currentPath != targetPath) {
-                    (current.navigationBackstack + current.currentPath).takeLast(30)
-                } else {
-                    current.navigationBackstack
-                }
-                stateFlow.value = current.copy(
-                    currentPath = targetPath,
-                    entries = sorted,
-                    selectedPaths = emptySet(),
-                    navigationBackstack = updatedStack,
-                    forwardStack = if (clearForward) emptyList() else current.forwardStack,
-                    highlightedPath = null,
-                    errorBanner = null
-                )
-                if (recordHistory && !VirtualArchiveBrowserEngine.isVirtualPath(targetPath)) {
-                    viewModelScope.launch(Dispatchers.IO) {
-                        dao.insertPathHistory(PathHistoryEntity(paneId = paneId, pathOrUri = targetPath))
+        val jobSlot = if (paneId == "A") "A" else "B"
+        if (jobSlot == "A") paneALoadJob?.cancel() else paneBLoadJob?.cancel()
+        stateFlow.value = current.copy(currentPath = targetPath, entries = emptyList(), allEntries = emptyList(), selectedPaths = emptySet(), isLoading = true, errorBanner = null)
+        val loadJob = viewModelScope.launch(Dispatchers.IO) {
+            val result = if (VirtualArchiveBrowserEngine.isVirtualPath(targetPath)) {
+                VirtualArchiveBrowserEngine.listVirtualDirectory(targetPath)
+            } else if (safProvider.isSafUri(targetPath)) {
+                safProvider.list(targetPath)
+            } else {
+                localProvider.list(targetPath)
+            }
+            withContext(Dispatchers.Main) {
+                // Ignore stale results if a newer navigation has already replaced this target.
+                if (stateFlow.value.currentPath != targetPath) return@withContext
+                when (result) {
+                    is AppResult.Success -> {
+                        val latest = stateFlow.value
+                        val sorted = filterAndSort(result.data, latest.searchQuery, latest.sortConfig)
+                        val updatedStack = if (recordHistory && current.currentPath.isNotEmpty() && current.currentPath != targetPath) {
+                            (current.navigationBackstack + current.currentPath).takeLast(30)
+                        } else current.navigationBackstack
+                        stateFlow.value = latest.copy(
+                            entries = sorted,
+                            allEntries = result.data,
+                            selectedPaths = emptySet(),
+                            navigationBackstack = updatedStack,
+                            forwardStack = if (clearForward) emptyList() else latest.forwardStack,
+                            highlightedPath = null,
+                            errorBanner = null,
+                            isLoading = false
+                        )
+                        if (recordHistory && !VirtualArchiveBrowserEngine.isVirtualPath(targetPath)) {
+                            launch(Dispatchers.IO) {
+                                dao.insertPathHistory(PathHistoryEntity(paneId = paneId, pathOrUri = targetPath))
+                            }
+                        }
+                    }
+                    is AppResult.Failure -> {
+                        stateFlow.value = stateFlow.value.copy(
+                            isLoading = false,
+                            errorBanner = result.error.localizedMessage(_isArabicRtl.value)
+                        )
                     }
                 }
             }
-            is AppResult.Failure -> {
-                stateFlow.value = current.copy(
-                    errorBanner = listResult.error.localizedMessage(_isArabicRtl.value)
-                )
-            }
         }
+        if (jobSlot == "A") paneALoadJob = loadJob else paneBLoadJob = loadJob
     }
 
     fun navigateUp(paneId: String) {
@@ -611,6 +675,12 @@ class YemenManagerViewModel(application: Application) : AndroidViewModel(applica
             return
         }
 
+        if (safProvider.isSafUri(state.currentPath)) {
+            val parentUri = safProvider.parentUri(state.currentPath)
+            if (parentUri != null) navigatePane(paneId, parentUri)
+            else _statusToast.value = if (_isArabicRtl.value) "أنت في جذر المجلد المختار" else "Already at selected folder root"
+            return
+        }
         val currentFile = File(state.currentPath)
         val parent = currentFile.parentFile
         if (parent != null && parent.canRead()) {
@@ -695,6 +765,17 @@ class YemenManagerViewModel(application: Application) : AndroidViewModel(applica
     }
 
     fun resolveVirtualOrRealFilePath(uriOrPath: String): String {
+        if (safProvider.isSafUri(uriOrPath)) {
+            return try {
+                val meta = safProvider.inspectUriMetadata(uriOrPath)
+                val name = (meta as? AppResult.Success)?.data?.name ?: "document.bin"
+                val out = File(virtualCacheDir, "saf_${name.replace(Regex("[^A-Za-z0-9._-]"), "_")}")
+                out.parentFile?.mkdirs()
+                val input = (safProvider.openInputStream(uriOrPath) as? AppResult.Success)?.data ?: return uriOrPath
+                input.use { src -> out.outputStream().use { dst -> src.copyTo(dst) } }
+                out.absolutePath
+            } catch (_: Exception) { uriOrPath }
+        }
         if (!VirtualArchiveBrowserEngine.isVirtualPath(uriOrPath)) return uriOrPath
         return when (val res = VirtualArchiveBrowserEngine.materializeVirtualEntryToWorkingFile(uriOrPath, virtualCacheDir)) {
             is AppResult.Success -> res.data.absolutePath
@@ -711,17 +792,12 @@ class YemenManagerViewModel(application: Application) : AndroidViewModel(applica
     }
 
     fun updatePaneSearch(paneId: String, query: String) {
+        // Search the already-loaded snapshot; never re-enumerate disk/SAF on each keystroke.
         val stateFlow = if (paneId == "A") _paneA else _paneB
         val current = stateFlow.value
-        val rawResult = if (current.isVirtualArchive) {
-            VirtualArchiveBrowserEngine.listVirtualDirectory(current.currentPath)
-        } else {
-            localProvider.list(current.currentPath)
-        }
-        val allEntries = (rawResult as? AppResult.Success)?.data ?: current.entries
         stateFlow.value = current.copy(
             searchQuery = query,
-            entries = filterAndSort(allEntries, query, current.sortConfig)
+            entries = filterAndSort(current.allEntries.ifEmpty { current.entries }, query, current.sortConfig)
         )
     }
 
@@ -801,6 +877,10 @@ class YemenManagerViewModel(application: Application) : AndroidViewModel(applica
     }
 
     fun renameFile(paneId: String, path: String, newName: String) {
+        if (safProvider.isSafUri(path)) {
+            _statusToast.value = if (_isArabicRtl.value) "إعادة التسمية عبر مزود SAF غير مدعومة بعد" else "Rename is not yet implemented for SAF documents"
+            return
+        }
         when (val res = localProvider.rename(path, newName)) {
             is AppResult.Success -> {
                 refreshPane(paneId)
@@ -817,6 +897,10 @@ class YemenManagerViewModel(application: Application) : AndroidViewModel(applica
         val dstPane = inactivePane()
         val selected = srcPane.selectedPaths.toList()
         if (selected.isEmpty() || dstPane.isVirtualArchive) return
+        if (safProvider.isSafUri(dstPane.currentPath)) {
+            _statusToast.value = if (_isArabicRtl.value) "النسخ إلى مجلد SAF غير مدعوم بعد؛ لم تُنفذ أي تغييرات" else "Copying into SAF is not implemented yet; nothing was changed"
+            return
+        }
 
         val resolvedSources = selected.map { resolveVirtualOrRealFilePath(it) }
 
@@ -864,6 +948,10 @@ class YemenManagerViewModel(application: Application) : AndroidViewModel(applica
         val dstPane = inactivePane()
         val selected = srcPane.selectedPaths.toList()
         if (selected.isEmpty() || srcPane.isVirtualArchive || dstPane.isVirtualArchive) return
+        if (safProvider.isSafUri(srcPane.currentPath) || safProvider.isSafUri(dstPane.currentPath) || selected.any { safProvider.isSafUri(it) }) {
+            _statusToast.value = if (_isArabicRtl.value) "النقل عبر SAF غير مدعوم بعد؛ لم يُحذف المصدر" else "Moving SAF items is not implemented yet; source was not deleted"
+            return
+        }
 
         taskCenter.enqueueAndRun(
             type = OperationType.MOVE,
@@ -906,6 +994,10 @@ class YemenManagerViewModel(application: Application) : AndroidViewModel(applica
         val srcPane = activePane()
         val selected = srcPane.selectedPaths.toList()
         if (selected.isEmpty() || srcPane.isVirtualArchive) return
+        if (selected.any { safProvider.isSafUri(it) }) {
+            _statusToast.value = if (_isArabicRtl.value) "الحذف عبر SAF غير مدعوم بعد" else "Delete is not yet implemented for SAF documents"
+            return
+        }
 
         taskCenter.enqueueAndRun(
             type = if (moveToTrashOnly) OperationType.TRASH else OperationType.DELETE,
@@ -939,8 +1031,12 @@ class YemenManagerViewModel(application: Application) : AndroidViewModel(applica
     }
 
     fun refreshTrashEntries() {
-        val res = localProvider.list(trashDir.absolutePath)
-        _trashEntries.value = (res as? AppResult.Success)?.data ?: emptyList()
+        viewModelScope.launch(Dispatchers.IO) {
+            val res = localProvider.list(trashDir.absolutePath)
+            withContext(Dispatchers.Main) {
+                _trashEntries.value = (res as? AppResult.Success)?.data ?: emptyList()
+            }
+        }
     }
 
     fun restoreFromTrash(entry: FileEntry) {
@@ -1466,8 +1562,14 @@ class YemenManagerViewModel(application: Application) : AndroidViewModel(applica
     }
 
     fun refreshSystemCapabilities() {
-        _privilegeStatuses.value = privilegeProber.probeAllProviders()
-        _lanServerState.value = lanServer.getState()
+        viewModelScope.launch(Dispatchers.IO) {
+            val capabilities = privilegeProber.probeAllProviders()
+            val serverState = lanServer.getState()
+            withContext(Dispatchers.Main) {
+                _privilegeStatuses.value = capabilities
+                _lanServerState.value = serverState
+            }
+        }
     }
 
     fun toggleLanServer() {

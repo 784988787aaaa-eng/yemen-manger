@@ -594,7 +594,11 @@ object LocalTerminalSimulator {
                     if (!f.exists() || f.isDirectory) {
                         currentDir to "cat: $name: No such file"
                     } else {
-                        val bytes = f.inputStream().use { it.readNBytes(4096) }
+                        val bytes = f.inputStream().use { input ->
+                            val buffer = ByteArray(4096)
+                            val read = input.read(buffer)
+                            if (read > 0) buffer.copyOf(read) else ByteArray(0)
+                        }
                         currentDir to String(bytes, Charsets.UTF_8)
                     }
                 }
