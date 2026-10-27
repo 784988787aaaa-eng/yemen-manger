@@ -1,0 +1,21 @@
+<resources>
+    <string name="app_name">Yemen Manager</string>
+    <string name="app_tagline">Advanced Android File &amp; App Toolkit</string>
+    <string name="nav_files">File Manager</string>
+    <string name="nav_workspace">Editors &amp; Diff</string>
+    <string name="nav_archives">Archive Lab</string>
+    <string name="nav_apk_lab">APK Lab</string>
+    <string name="nav_installed">Installed Apps</string>
+    <string name="nav_tasks">Task Center</string>
+    <string name="nav_settings">Settings &amp; Capabilities</string>
+    <string name="pane_left">Pane A</string>
+    <string name="pane_right">Pane B</string>
+    <string name="action_new_folder">New Folder</string>
+    <string name="action_copy_to_other">Copy to Other Pane</string>
+    <string name="action_move_to_other">Move to Other Pane</string>
+    <string name="action_delete">Delete</string>
+    <string name="action_rename">Rename</string>
+    <string name="action_properties">Properties &amp; Hashes</string>
+    <string name="action_open_saf">Mount SAF Folder</string>
+    <string name="offline_badge">100% Local-First Offline Mode</string>
+</resources>

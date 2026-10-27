@@ -1,0 +1,6 @@
+{
+  "name": "Yemen Manager",
+  "description": "Advanced local-first Android file manager, archive inspector, text/hex/diff workspace, static APK analyzer & signer, and installed apps toolkit.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

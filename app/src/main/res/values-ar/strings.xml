@@ -1,0 +1,21 @@
+<resources>
+    <string name="app_name">Yemen Manager</string>
+    <string name="app_tagline">أدوات متقدمة لإدارة الملفات وتحليل الحزم محليًا</string>
+    <string name="nav_files">مدير الملفات</string>
+    <string name="nav_workspace">المحررات والمقارنة</string>
+    <string name="nav_archives">مختبر الأرشيفات</string>
+    <string name="nav_apk_lab">مختبر APK</string>
+    <string name="nav_installed">التطبيقات المثبتة</string>
+    <string name="nav_tasks">مركز العمليات</string>
+    <string name="nav_settings">الإعدادات والقدرات</string>
+    <string name="pane_left">اللوحة أ</string>
+    <string name="pane_right">اللوحة ب</string>
+    <string name="action_new_folder">مجلد جديد</string>
+    <string name="action_copy_to_other">نسخ للوحة المقابلة</string>
+    <string name="action_move_to_other">نقل للوحة المقابلة</string>
+    <string name="action_delete">حذف</string>
+    <string name="action_rename">إعادة تسمية</string>
+    <string name="action_properties">الخصائص والبصمات</string>
+    <string name="action_open_saf">ربط مجلد SAF</string>
+    <string name="offline_badge">وضع محلي بالكامل دون إنترنت</string>
+</resources>
