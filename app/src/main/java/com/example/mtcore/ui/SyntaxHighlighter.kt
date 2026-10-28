@@ -23,6 +23,17 @@ data class NavSymbolItem(
     val charOffset: Int
 )
 
+enum class SyntaxLanguage(val label: String) {
+    AUTO("Auto"),
+    KOTLIN("Kotlin"),
+    JAVA("Java"),
+    XML("XML"),
+    SMALI("Smali"),
+    JSON("JSON"),
+    SHELL("Shell"),
+    NONE("None")
+}
+
 object SyntaxHighlighter {
     private val KeywordColor = Color(0xFFA31515)   // Rich Brownish-Red (#A31515)
     private val AttributeColor = Color(0xFF7B1FA2) // Distinct Purple/Red for XML attributes (#7B1FA2)
@@ -31,6 +42,8 @@ object SyntaxHighlighter {
     private val NumberColor = Color(0xFF1565C0)    // Blue (#1565C0)
     private val RegisterColor = Color(0xFF6A1B9A)  // Purple for Smali registers (v0, p0) (#6A1B9A)
     private val SymbolColor = Color(0xFF111111)    // Black (#111111)
+    private val SearchMatchBg = Color(0xFFFFF59D)  // Soft Yellow search highlight
+    private val ActiveSearchMatchBg = Color(0xFFFFB74D) // Orange active search match highlight
 
     private val KEYWORDS = setOf(
         // Smali directives & modifiers
@@ -58,14 +71,10 @@ object SyntaxHighlighter {
         "for", "while", "do", "try", "catch", "finally", "true", "false", "null", "void",
         "int", "long", "boolean", "float", "double", "char", "byte", "short", "override",
         "suspend", "data", "sealed", "companion", "internal", "open", "extends", "implements",
-        "new", "this", "super", "switch", "case", "default", "break", "continue", "throws"
+        "new", "this", "super", "switch", "case", "default", "break", "continue", "throws",
+        // Shell keywords
+        "echo", "export", "fi", "then", "elif", "esac", "done", "in", "function", "local"
     )
-
-    private val REGISTER_REGEX = Regex("\\b([vp]\\d{1,3})\\b")
-    private val HEX_NUMBER_REGEX = Regex("(-?0x[0-9a-fA-F]+L?|\\b\\d+(?:\\.\\d+)?\\b)")
-    private val WORD_TOKEN_REGEX = Regex("(\\.[a-zA-Z_][a-zA-Z0-9_-]*|\\b[a-zA-Z_][a-zA-Z0-9_/-]*\\b)")
-    private val XML_TAG_NAME_REGEX = Regex("(</?[a-zA-Z0-9_:-]+|<\\?[a-zA-Z0-9_:-]+|\\?>|/?>)")
-    private val XML_ATTR_NAME_REGEX = Regex("\\b([a-zA-Z0-9_:-]+)(?=\\s*=)")
 
     fun createVisualTransformation(fileName: String?): VisualTransformation {
         return VisualTransformation { text ->
@@ -76,161 +85,332 @@ object SyntaxHighlighter {
         }
     }
 
-    fun highlight(source: String, fileName: String?): AnnotatedString {
+    /**
+     * Zero-lag VisualTransformation that reuses the pre-computed [preHighlighted] AnnotatedString
+     * when the text matches, avoiding expensive regex recomputation on the UI thread during scrolling/typing.
+     */
+    fun fromPreHighlighted(
+        preHighlighted: AnnotatedString,
+        fileName: String?,
+        language: SyntaxLanguage = SyntaxLanguage.AUTO
+    ): VisualTransformation {
+        return VisualTransformation { text ->
+            val raw = text.text
+            val styled = if (preHighlighted.text == raw) {
+                preHighlighted
+            } else if (raw.length > 80_000) {
+                // Fast character-level pass for very large edits before background coroutine finishes
+                highlight(raw, fileName, language, emptyList(), -1, smoothMode = true)
+            } else {
+                highlight(raw, fileName, language, emptyList(), -1, smoothMode = true)
+            }
+            TransformedText(
+                text = styled,
+                offsetMapping = OffsetMapping.Identity
+            )
+        }
+    }
+
+    fun detectLanguage(source: String, fileName: String?, explicit: SyntaxLanguage): SyntaxLanguage {
+        if (explicit != SyntaxLanguage.AUTO) return explicit
+        val lower = fileName?.lowercase().orEmpty()
         val trimmed = source.trimStart()
-        val isXml = fileName?.endsWith(".xml", ignoreCase = true) == true ||
-            trimmed.startsWith("<?xml") ||
-            trimmed.startsWith("<manifest") ||
-            trimmed.startsWith("<resources")
-        return highlight(source, isXml)
+        return when {
+            lower.endsWith(".xml") || trimmed.startsWith("<?xml") || trimmed.startsWith("<manifest") || trimmed.startsWith("<resources") -> SyntaxLanguage.XML
+            lower.endsWith(".smali") || trimmed.startsWith(".class ") -> SyntaxLanguage.SMALI
+            lower.endsWith(".kt") || lower.endsWith(".kts") -> SyntaxLanguage.KOTLIN
+            lower.endsWith(".java") -> SyntaxLanguage.JAVA
+            lower.endsWith(".json") || (trimmed.startsWith("{") && trimmed.endsWith("}")) -> SyntaxLanguage.JSON
+            lower.endsWith(".sh") || trimmed.startsWith("#!/") -> SyntaxLanguage.SHELL
+            else -> SyntaxLanguage.KOTLIN
+        }
+    }
+
+    fun highlight(source: String, fileName: String?): AnnotatedString {
+        return highlight(
+            source = source,
+            fileName = fileName,
+            language = SyntaxLanguage.AUTO,
+            searchRanges = emptyList(),
+            activeSearchIndex = -1,
+            smoothMode = true
+        )
     }
 
     fun highlight(source: String, isXml: Boolean = false): AnnotatedString {
+        return highlight(
+            source = source,
+            fileName = if (isXml) "file.xml" else "file.kt",
+            language = if (isXml) SyntaxLanguage.XML else SyntaxLanguage.AUTO,
+            searchRanges = emptyList(),
+            activeSearchIndex = -1,
+            smoothMode = true
+        )
+    }
+
+    fun highlight(
+        source: String,
+        fileName: String?,
+        language: SyntaxLanguage = SyntaxLanguage.AUTO,
+        searchRanges: List<IntRange> = emptyList(),
+        activeSearchIndex: Int = -1,
+        smoothMode: Boolean = true
+    ): AnnotatedString {
         if (source.isEmpty()) return AnnotatedString("")
+        val resolvedLang = detectLanguage(source, fileName, language)
+        if (resolvedLang == SyntaxLanguage.NONE) {
+            val builder = AnnotatedString.Builder(source)
+            applySearchHighlights(builder, source.length, searchRanges, activeSearchIndex)
+            return builder.toAnnotatedString()
+        }
+
         val builder = AnnotatedString.Builder(source)
+        val isXml = resolvedLang == SyntaxLanguage.XML
+        val length = source.length
+        // Smooth mode caps detailed line highlighting past 250,000 chars so massive 10,000+ line files never lag
+        val maxHighlightOffset = if (smoothMode) length.coerceAtMost(250_000) else length
 
         var lineStart = 0
-        val length = source.length
-        while (lineStart < length) {
+        while (lineStart < maxHighlightOffset) {
             val lineEnd = source.indexOf('\n', lineStart).let { if (it == -1) length else it }
-            highlightLine(builder, source, lineStart, lineEnd, isXml)
+            if (isXml) {
+                highlightXmlLineFast(builder, source, lineStart, lineEnd)
+            } else {
+                highlightCodeLineFast(builder, source, lineStart, lineEnd)
+            }
             lineStart = lineEnd + 1
         }
+
+        applySearchHighlights(builder, length, searchRanges, activeSearchIndex)
         return builder.toAnnotatedString()
     }
 
-    private fun highlightLine(
+    private fun applySearchHighlights(
+        builder: AnnotatedString.Builder,
+        textLength: Int,
+        searchRanges: List<IntRange>,
+        activeSearchIndex: Int
+    ) {
+        if (searchRanges.isEmpty()) return
+        for (i in searchRanges.indices) {
+            val r = searchRanges[i]
+            val start = r.first.coerceIn(0, textLength)
+            val end = (r.last + 1).coerceIn(start, textLength)
+            if (start < end) {
+                val bg = if (i == activeSearchIndex) ActiveSearchMatchBg else SearchMatchBg
+                builder.addStyle(
+                    SpanStyle(background = bg, color = Color(0xFF111111), fontWeight = FontWeight.Bold),
+                    start,
+                    end
+                )
+            }
+        }
+    }
+
+    /**
+     * Zero-Regex character-level XML line highlighter for instant 3,000+ line AXML/Manifest rendering.
+     */
+    private fun highlightXmlLineFast(
         builder: AnnotatedString.Builder,
         source: String,
         start: Int,
-        end: Int,
-        isXml: Boolean
+        end: Int
     ) {
         if (start >= end) return
-        val line = source.substring(start, end)
-
-        // 1. XML syntax highlighting
-        if (isXml) {
-            val commentStart = line.indexOf("<!--")
-            if (commentStart >= 0) {
-                builder.addStyle(SpanStyle(color = CommentColor), start + commentStart, end)
-                return
-            }
-            // Equals sign and base symbols
-            var eqIdx = line.indexOf('=')
-            while (eqIdx >= 0) {
-                builder.addStyle(
-                    SpanStyle(color = SymbolColor, fontWeight = FontWeight.Medium),
-                    start + eqIdx,
-                    start + eqIdx + 1
-                )
-                eqIdx = line.indexOf('=', eqIdx + 1)
-            }
-            // XML Tag Names (<manifest, <application, <uses-permission, </manifest>, />, >)
-            for (match in XML_TAG_NAME_REGEX.findAll(line)) {
-                builder.addStyle(
-                    SpanStyle(color = KeywordColor, fontWeight = FontWeight.Bold),
-                    start + match.range.first,
-                    start + match.range.last + 1
-                )
-            }
-            // XML Attribute Names (android:name, xmlns:android, package, versionCode)
-            for (match in XML_ATTR_NAME_REGEX.findAll(line)) {
-                builder.addStyle(
-                    SpanStyle(color = AttributeColor, fontWeight = FontWeight.Medium),
-                    start + match.range.first,
-                    start + match.range.last + 1
-                )
-            }
-            // XML Quoted Attribute Values ("android.permission.INTERNET") in Green (#2E7D32)
-            highlightStrings(builder, line, start)
+        val commentIdx = source.indexOf("<!--", start)
+        if (commentIdx in start until end) {
+            builder.addStyle(SpanStyle(color = CommentColor), commentIdx, end)
             return
         }
 
-        // 2. Check # or // comments outside strings
-        val commentIdx = findCommentStart(line)
-        val codePartEnd = if (commentIdx >= 0) commentIdx else line.length
-        val codeLine = line.substring(0, codePartEnd)
+        var i = start
+        while (i < end) {
+            val ch = source[i]
+            when {
+                ch == '"' -> {
+                    val strStart = i
+                    i++
+                    while (i < end) {
+                        if (source[i] == '\\') {
+                            i += 2
+                            continue
+                        }
+                        if (source[i] == '"') {
+                            i++
+                            break
+                        }
+                        i++
+                    }
+                    builder.addStyle(
+                        SpanStyle(color = StringColor),
+                        strStart,
+                        i.coerceAtMost(end)
+                    )
+                }
+                ch == '<' -> {
+                    val tagStart = i
+                    i++
+                    if (i < end && (source[i] == '/' || source[i] == '?')) i++
+                    while (i < end && isXmlNameChar(source[i])) i++
+                    builder.addStyle(
+                        SpanStyle(color = KeywordColor, fontWeight = FontWeight.Bold),
+                        tagStart,
+                        i
+                    )
+                }
+                ch == '>' -> {
+                    builder.addStyle(
+                        SpanStyle(color = KeywordColor, fontWeight = FontWeight.Bold),
+                        i,
+                        i + 1
+                    )
+                    i++
+                }
+                (ch == '/' || ch == '?') && i + 1 < end && source[i + 1] == '>' -> {
+                    builder.addStyle(
+                        SpanStyle(color = KeywordColor, fontWeight = FontWeight.Bold),
+                        i,
+                        i + 2
+                    )
+                    i += 2
+                }
+                ch == '=' -> {
+                    builder.addStyle(
+                        SpanStyle(color = SymbolColor, fontWeight = FontWeight.Medium),
+                        i,
+                        i + 1
+                    )
+                    i++
+                }
+                isXmlNameStart(ch) -> {
+                    val attrStart = i
+                    i++
+                    while (i < end && isXmlNameChar(source[i])) i++
+                    var probe = i
+                    while (probe < end && (source[probe] == ' ' || source[probe] == '\t')) probe++
+                    if (probe < end && source[probe] == '=') {
+                        builder.addStyle(
+                            SpanStyle(color = AttributeColor, fontWeight = FontWeight.Medium),
+                            attrStart,
+                            i
+                        )
+                    }
+                }
+                else -> i++
+            }
+        }
+    }
 
-        // 3. Keywords & Directives (.class, .super, .method, .end method, public, fun, val, var)
-        for (match in WORD_TOKEN_REGEX.findAll(codeLine)) {
-            val token = match.value
-            if (token in KEYWORDS) {
-                builder.addStyle(
-                    SpanStyle(
-                        color = KeywordColor,
-                        fontWeight = FontWeight.Medium
-                    ),
-                    start + match.range.first,
-                    start + match.range.last + 1
-                )
+    /**
+     * Zero-Regex character-level Smali/Kotlin/Java/JSON/Shell highlighter for instant 3,500+ line rendering.
+     */
+    private fun highlightCodeLineFast(
+        builder: AnnotatedString.Builder,
+        source: String,
+        start: Int,
+        end: Int
+    ) {
+        if (start >= end) return
+        val commentPos = findCommentStartRange(source, start, end)
+        val codeEnd = if (commentPos >= 0) commentPos else end
+
+        var i = start
+        while (i < codeEnd) {
+            val ch = source[i]
+            when {
+                ch == '"' || ch == '\'' -> {
+                    val quote = ch
+                    val strStart = i
+                    i++
+                    while (i < codeEnd) {
+                        if (source[i] == '\\') {
+                            i += 2
+                            continue
+                        }
+                        if (source[i] == quote) {
+                            i++
+                            break
+                        }
+                        i++
+                    }
+                    builder.addStyle(
+                        SpanStyle(color = StringColor),
+                        strStart,
+                        i.coerceAtMost(codeEnd)
+                    )
+                }
+                (ch == '.' && i + 1 < codeEnd && source[i + 1].isLetter()) || ch.isLetter() || ch == '_' -> {
+                    val tokStart = i
+                    i++
+                    while (i < codeEnd && (source[i].isLetterOrDigit() || source[i] == '_' || source[i] == '-' || source[i] == '/')) {
+                        i++
+                    }
+                    val token = source.substring(tokStart, i)
+                    when {
+                        token in KEYWORDS -> {
+                            builder.addStyle(
+                                SpanStyle(color = KeywordColor, fontWeight = FontWeight.Medium),
+                                tokStart,
+                                i
+                            )
+                        }
+                        isSmaliRegister(token) -> {
+                            builder.addStyle(
+                                SpanStyle(color = RegisterColor, fontWeight = FontWeight.Medium),
+                                tokStart,
+                                i
+                            )
+                        }
+                    }
+                }
+                ch.isDigit() || (ch == '-' && i + 1 < codeEnd && source[i + 1].isDigit()) -> {
+                    val numStart = i
+                    i++
+                    if (i < codeEnd && (source[i] == 'x' || source[i] == 'X')) {
+                        i++
+                        while (i < codeEnd && isHexDigit(source[i])) i++
+                    } else {
+                        while (i < codeEnd && (source[i].isDigit() || source[i] == '.')) i++
+                    }
+                    if (i < codeEnd && (source[i] == 'L' || source[i] == 'f' || source[i] == 'F')) i++
+                    builder.addStyle(
+                        SpanStyle(color = NumberColor),
+                        numStart,
+                        i
+                    )
+                }
+                else -> i++
             }
         }
 
-        // 4. Numbers & Hex constants (0x...)
-        for (match in HEX_NUMBER_REGEX.findAll(codeLine)) {
-            builder.addStyle(
-                SpanStyle(color = NumberColor),
-                start + match.range.first,
-                start + match.range.last + 1
-            )
-        }
-
-        // 5. Smali registers (v0..v15, p0..p15)
-        for (match in REGISTER_REGEX.findAll(codeLine)) {
-            builder.addStyle(
-                SpanStyle(color = RegisterColor, fontWeight = FontWeight.Medium),
-                start + match.range.first,
-                start + match.range.last + 1
-            )
-        }
-
-        // 6. String literals ("...") in Green (#2E7D32)
-        highlightStrings(builder, codeLine, start)
-
-        // 7. Trailing comment (# ... or // ...) in Gray (#808080)
-        if (commentIdx >= 0) {
+        if (commentPos >= 0) {
             builder.addStyle(
                 SpanStyle(color = CommentColor),
-                start + commentIdx,
+                commentPos,
                 end
             )
         }
     }
 
-    private fun highlightStrings(builder: AnnotatedString.Builder, line: String, lineOffset: Int) {
-        var i = 0
-        while (i < line.length) {
-            if (line[i] == '"') {
-                val strStart = i
-                i++
-                while (i < line.length) {
-                    if (line[i] == '\\') {
-                        i += 2
-                        continue
-                    }
-                    if (line[i] == '"') {
-                        i++
-                        break
-                    }
-                    i++
-                }
-                builder.addStyle(
-                    SpanStyle(color = StringColor, fontWeight = FontWeight.Normal),
-                    lineOffset + strStart,
-                    lineOffset + i.coerceAtMost(line.length)
-                )
-            } else {
-                i++
-            }
+    private fun isXmlNameStart(ch: Char): Boolean = ch.isLetter() || ch == '_' || ch == ':'
+    private fun isXmlNameChar(ch: Char): Boolean = ch.isLetterOrDigit() || ch == '_' || ch == '-' || ch == ':' || ch == '.'
+    private fun isHexDigit(ch: Char): Boolean = ch.isDigit() || ch in 'a'..'f' || ch in 'A'..'F'
+
+    private fun isSmaliRegister(token: String): Boolean {
+        if (token.length !in 2..4) return false
+        val first = token[0]
+        if (first != 'v' && first != 'p') return false
+        for (idx in 1 until token.length) {
+            if (!token[idx].isDigit()) return false
         }
+        return true
     }
 
-    private fun findCommentStart(line: String): Int {
+    private fun findCommentStartRange(source: String, start: Int, end: Int): Int {
         var inQuotes = false
-        var i = 0
-        while (i < line.length) {
-            val ch = line[i]
+        var i = start
+        while (i < end) {
+            val ch = source[i]
             if (ch == '\\' && inQuotes) {
                 i += 2
                 continue
@@ -239,11 +419,43 @@ object SyntaxHighlighter {
                 inQuotes = !inQuotes
             } else if (!inQuotes) {
                 if (ch == '#') return i
-                if (ch == '/' && i + 1 < line.length && line[i + 1] == '/') return i
+                if (ch == '/' && i + 1 < end && source[i + 1] == '/') return i
             }
             i++
         }
         return -1
+    }
+
+    fun extractCompletionWords(source: String, prefix: String): List<String> {
+        val clean = prefix.trim()
+        if (clean.length < 2) return emptyList()
+        val matches = LinkedHashSet<String>()
+        for (kw in KEYWORDS) {
+            if (kw.startsWith(clean, ignoreCase = true) && kw != clean) {
+                matches.add(kw)
+                if (matches.size >= 8) return matches.toList()
+            }
+        }
+        val limit = source.length.coerceAtMost(40_000)
+        var i = 0
+        while (i < limit && matches.size < 10) {
+            val ch = source[i]
+            if (ch.isLetter() || ch == '_' || ch == '.') {
+                val start = i
+                i++
+                while (i < limit && (source[i].isLetterOrDigit() || source[i] == '_' || source[i] == '-')) i++
+                val len = i - start
+                if (len in 3..36) {
+                    val word = source.substring(start, i)
+                    if (word.startsWith(clean, ignoreCase = true) && word != clean) {
+                        matches.add(word)
+                    }
+                }
+            } else {
+                i++
+            }
+        }
+        return matches.toList()
     }
 
     fun parseNavigationSymbols(text: String, fileName: String?): List<NavSymbolItem> {
@@ -316,7 +528,8 @@ object SyntaxHighlighter {
                     activeMethodTitle = null
                 }
                 // Kotlin / Java class / interface / object
-                trimmed.matches(Regex("^(public |private |internal |abstract |final |data |sealed |open )*(class|interface|object)\\s+[A-Za-z0-9_]+.*")) -> {
+                (trimmed.contains("class ") || trimmed.contains("interface ") || trimmed.contains("object ")) &&
+                    trimmed.matches(Regex("^(public |private |internal |abstract |final |data |sealed |open )*(class|interface|object)\\s+[A-Za-z0-9_]+.*")) -> {
                     val name = trimmed.replace(Regex("^.*\\b(class|interface|object)\\s+"), "")
                         .substringBefore('(')
                         .substringBefore(':')
@@ -334,7 +547,8 @@ object SyntaxHighlighter {
                     }
                 }
                 // Kotlin / Java function
-                trimmed.matches(Regex("^(public |private |protected |internal |override |suspend |inline |static |final )*fun\\s+[A-Za-z0-9_<>]+\\s*\\(.*")) -> {
+                trimmed.contains("fun ") &&
+                    trimmed.matches(Regex("^(public |private |protected |internal |override |suspend |inline |static |final )*fun\\s+[A-Za-z0-9_<>]+\\s*\\(.*")) -> {
                     val afterFun = trimmed.substringAfter("fun ").trim()
                     val mName = afterFun.substringBefore('(').trim()
                     val params = "(" + afterFun.substringAfter('(', "").substringBefore('{').trim()
@@ -348,9 +562,10 @@ object SyntaxHighlighter {
                     )
                 }
                 // Kotlin val / var property
-                trimmed.matches(Regex("^(private |public |internal |const |lateinit )*(val|var)\\s+[A-Za-z0-9_]+.*")) -> {
+                (trimmed.startsWith("val ") || trimmed.startsWith("var ") || trimmed.contains(" val ") || trimmed.contains(" var ")) &&
+                    trimmed.matches(Regex("^(private |public |internal |const |lateinit )*(val|var)\\s+[A-Za-z0-9_]+.*")) -> {
                     val afterVal = trimmed.replace(Regex("^.*\\b(val|var)\\s+"), "")
-                    val fName = afterVal.substringBefore(':').substringBefore('=').trim()
+                        val fName = afterVal.substringBefore(':').substringBefore('=').trim()
                     if (fName.isNotEmpty() && !rawLine.startsWith("        ")) {
                         symbols += NavSymbolItem(
                             kind = NavSymbolKind.FIELD,
@@ -363,7 +578,7 @@ object SyntaxHighlighter {
                     }
                 }
                 // XML key tags (activity, service, receiver, provider, uses-permission, application)
-                isXml &&
+                isXml && trimmed.startsWith("<") &&
                     trimmed.matches(Regex("^<(manifest|application|activity|service|receiver|provider|uses-permission|uses-sdk)\\b.*")) -> {
                     val tag = trimmed.removePrefix("<").substringBefore(' ').substringBefore('>')
                     val snippet = lines.subList(index, (index + 6).coerceAtMost(lines.size)).joinToString(" ")

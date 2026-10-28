@@ -355,6 +355,36 @@
     <string name="pseudo_enc_status_label">Pseudo-Encryption Bit:</string>
     <string name="debuggable_status_label">Manifest Debuggable:</string>
     <string name="toggle_read_edit_mode">Read-only / Edit Mode</string>
+
+    <!-- v16 Zero-Lag Code Editor, Line Actions, Overflow Menu & Find/Replace -->
+    <string name="line_copy">Copy line</string>
+    <string name="line_cut">Cut line</string>
+    <string name="line_delete">Delete line</string>
+    <string name="line_empty">Empty line</string>
+    <string name="line_replace">Replace line</string>
+    <string name="line_duplicate">Duplicate line</string>
+    <string name="convert_uppercase">Convert to uppercase</string>
+    <string name="convert_lowercase">Convert to lowercase</string>
+    <string name="increase_indent">Increase indent</string>
+    <string name="decrease_indent">Decrease indent</string>
+    <string name="menu_file">File</string>
+    <string name="menu_search">Search</string>
+    <string name="menu_syntax">Syntax</string>
+    <string name="menu_prev_position">Previous position</string>
+    <string name="menu_next_position">Next position</string>
+    <string name="menu_jump_to_line">Jump to line</string>
+    <string name="menu_soft_wrap">Soft wrap</string>
+    <string name="menu_read_only">Read-only mode</string>
+    <string name="menu_smooth_mode">Smooth mode</string>
+    <string name="menu_code_completion">Code completion</string>
+    <string name="menu_close_file">Close file</string>
+    <string name="save_as">Save as…</string>
+    <string name="search_results_count">Results: %1$d</string>
+    <string name="btn_prev">PREV</string>
+    <string name="btn_next">NEXT</string>
+    <string name="btn_rep">REP</string>
+    <string name="btn_all">ALL</string>
+    <string name="open_files_drawer_title">Open / Recent Files</string>
 </resources>
 
 

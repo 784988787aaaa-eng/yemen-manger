@@ -355,6 +355,36 @@
     <string name="pseudo_enc_status_label">بت التشفير الزائف (Bit 0):</string>
     <string name="debuggable_status_label">حالة التصحيح (Debuggable):</string>
     <string name="toggle_read_edit_mode">وضع القراءة / التعديل</string>
+
+    <!-- v16 Zero-Lag Code Editor, Line Actions, Overflow Menu & Find/Replace -->
+    <string name="line_copy">نسخ السطر (Copy line)</string>
+    <string name="line_cut">قص السطر (Cut line)</string>
+    <string name="line_delete">حذف السطر (Delete line)</string>
+    <string name="line_empty">تفريغ السطر (Empty line)</string>
+    <string name="line_replace">استبدال السطر بالحافظة (Replace line)</string>
+    <string name="line_duplicate">تكرار السطر (Duplicate line)</string>
+    <string name="convert_uppercase">تحويل إلى أحرف كبيرة (UPPERCASE)</string>
+    <string name="convert_lowercase">تحويل إلى أحرف صغيرة (lowercase)</string>
+    <string name="increase_indent">زيادة الإزاحة (Increase indent)</string>
+    <string name="decrease_indent">إنقاص الإزاحة (Decrease indent)</string>
+    <string name="menu_file">ملف (File)</string>
+    <string name="menu_search">بحث واستبدال (Search)</string>
+    <string name="menu_syntax">التلوين النحوي (Syntax)</string>
+    <string name="menu_prev_position">الموضع السابق (Previous position)</string>
+    <string name="menu_next_position">الموضع التالي (Next position)</string>
+    <string name="menu_jump_to_line">القفز إلى سطر (Jump to line)</string>
+    <string name="menu_soft_wrap">التفاف الأسطر (Soft wrap)</string>
+    <string name="menu_read_only">وضع القراءة فقط (Read-only)</string>
+    <string name="menu_smooth_mode">الوضع السلس (Smooth mode)</string>
+    <string name="menu_code_completion">الإكمال التلقائي للكود (Code completion)</string>
+    <string name="menu_close_file">إغلاق الملف (Close file)</string>
+    <string name="save_as">حفظ باسم…</string>
+    <string name="search_results_count">النتائج: %1$d</string>
+    <string name="btn_prev">السابق</string>
+    <string name="btn_next">التالي</string>
+    <string name="btn_rep">استبدال</string>
+    <string name="btn_all">الكل</string>
+    <string name="open_files_drawer_title">الملفات المفتوحة والأخيرة</string>
 </resources>
 
 
