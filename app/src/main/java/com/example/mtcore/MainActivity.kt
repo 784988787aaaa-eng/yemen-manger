@@ -73,7 +73,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private var permissionGranted by mutableStateOf(false)
-    private var languageCode by mutableStateOf("en")
+    private var languageCode by mutableStateOf("ar")
 
     private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         val nowGranted = hasPermission()
@@ -83,12 +83,16 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val prefs = getSharedPreferences("mt_prefs", Context.MODE_PRIVATE)
+        val defaultLang = if (Locale.getDefault().language.startsWith("ar")) "ar" else "en"
+        languageCode = prefs.getString("app_lang", defaultLang) ?: defaultLang
         permissionGranted = hasPermission()
         setContent {
-            val localizedContext = localizedContext(this, languageCode)
+            val localizedContext = remember(languageCode) { localizedContext(this, languageCode) }
             val direction = if (languageCode == "ar") LayoutDirection.Rtl else LayoutDirection.Ltr
             CompositionLocalProvider(
                 LocalContext provides localizedContext,
+                androidx.compose.ui.platform.LocalConfiguration provides localizedContext.resources.configuration,
                 LocalLayoutDirection provides direction
             ) {
                 MTCoreTheme {
@@ -98,7 +102,11 @@ class MainActivity : ComponentActivity() {
                             requestPermission = { requestPermission() },
                             viewModel = mainViewModel,
                             languageCode = languageCode,
-                            onToggleLanguage = { languageCode = if (languageCode == "en") "ar" else "en" }
+                            onToggleLanguage = {
+                                val next = if (languageCode == "en") "ar" else "en"
+                                languageCode = next
+                                prefs.edit().putString("app_lang", next).apply()
+                            }
                         )
                     }
                 }
@@ -136,9 +144,13 @@ class MainActivity : ComponentActivity() {
 }
 
 private fun localizedContext(base: Context, languageCode: String): Context {
+    val locale = Locale(languageCode)
+    Locale.setDefault(locale)
     val configuration = Configuration(base.resources.configuration)
-    configuration.setLocale(Locale(languageCode))
-    configuration.setLayoutDirection(Locale(languageCode))
+    configuration.setLocale(locale)
+    configuration.setLayoutDirection(locale)
+    @Suppress("DEPRECATION")
+    base.resources.updateConfiguration(configuration, base.resources.displayMetrics)
     return base.createConfigurationContext(configuration)
 }
 

@@ -85,13 +85,32 @@ enum class OpenWithTool {
 }
 
 @Composable
+private fun LocalizedDialog(
+    onDismissRequest: () -> Unit,
+    content: @Composable () -> Unit
+) {
+    val outerContext = LocalContext.current
+    val outerConfig = androidx.compose.ui.platform.LocalConfiguration.current
+    val outerDirection = androidx.compose.ui.platform.LocalLayoutDirection.current
+    Dialog(onDismissRequest = onDismissRequest) {
+        androidx.compose.runtime.CompositionLocalProvider(
+            LocalContext provides outerContext,
+            androidx.compose.ui.platform.LocalConfiguration provides outerConfig,
+            androidx.compose.ui.platform.LocalLayoutDirection provides outerDirection
+        ) {
+            content()
+        }
+    }
+}
+
+@Composable
 private fun CompactDialog(
     title: String,
     onDismiss: () -> Unit,
     content: @Composable () -> Unit,
     actions: @Composable () -> Unit
 ) {
-    Dialog(onDismissRequest = onDismiss) {
+    LocalizedDialog(onDismissRequest = onDismiss) {
         Surface(
             modifier = Modifier.fillMaxWidth().widthIn(max = 380.dp),
             shape = RoundedCornerShape(4.dp),
@@ -135,7 +154,7 @@ fun OpenWithGridDialog(
         GridItem(OpenWithTool.COMPARISON_RESULT, R.string.open_with_diff_viewer, Color(0xFF00897B), null, "DIFF")
     )
 
-    Dialog(onDismissRequest = onDismiss) {
+    LocalizedDialog(onDismissRequest = onDismiss) {
         Surface(
             modifier = Modifier.fillMaxWidth().widthIn(max = 380.dp),
             shape = RoundedCornerShape(4.dp),
@@ -215,15 +234,15 @@ fun XmlOpenWithDialog(
     onTranslationMode: () -> Unit = onStringPool
 ) {
     var selectedOption by remember { mutableIntStateOf(0) }
-    val options = listOf(
-        stringResource(R.string.axml_decompile),
-        stringResource(R.string.axml_string_pool),
-        stringResource(R.string.xml_translation_mode)
-    )
     CompactDialog(
         title = stringResource(R.string.open_with),
         onDismiss = onDismiss,
         content = {
+            val options = listOf(
+                stringResource(R.string.axml_decompile),
+                stringResource(R.string.axml_string_pool),
+                stringResource(R.string.xml_translation_mode)
+            )
             Column {
                 options.forEachIndexed { index, label ->
                     Row(
@@ -267,16 +286,16 @@ fun ArscOpenWithDialog(
     onOpenStringPool: () -> Unit = {},
     onOpenTranslationMode: () -> Unit = onOpenStringPool
 ) {
-    val stringPoolLabel = stringResource(R.string.axml_string_pool)
-    val translationLabel = stringResource(R.string.translation_mode)
-    val options = listOf(
-        stringResource(R.string.arsc_editor_plus),
-        stringResource(R.string.arsc_editor),
-        translationLabel,
-        stringResource(R.string.resource_querier),
-        stringPoolLabel
-    )
-    Dialog(onDismissRequest = onDismiss) {
+    LocalizedDialog(onDismissRequest = onDismiss) {
+        val stringPoolLabel = stringResource(R.string.axml_string_pool)
+        val translationLabel = stringResource(R.string.translation_mode)
+        val options = listOf(
+            stringResource(R.string.arsc_editor_plus),
+            stringResource(R.string.arsc_editor),
+            translationLabel,
+            stringResource(R.string.resource_querier),
+            stringPoolLabel
+        )
         Surface(
             modifier = Modifier.fillMaxWidth().widthIn(max = 360.dp),
             shape = RoundedCornerShape(4.dp),
@@ -331,18 +350,18 @@ fun DexOpenWithDialog(
     onOpenDexStrings: () -> Unit,
     onShowDexProperty: () -> Unit
 ) {
-    val options = listOf(
-        stringResource(R.string.dex_editor_plus) to onOpenDexEditorPlus,
-        stringResource(R.string.dex_editor) to onOpenDexEditorPlus,
-        stringResource(R.string.repair_dex_file) to onRepairDexFile,
-        stringResource(R.string.dex_property) to onShowDexProperty,
-        stringResource(R.string.dex2jar) to onOpenDexEditorPlus,
-        stringResource(R.string.dex2smali) to onOpenDexEditorPlus,
-        stringResource(R.string.decrypt_dex_strings) to onOpenDexStrings,
-        stringResource(R.string.translation_mode) to onOpenDexStrings
-    )
+    LocalizedDialog(onDismissRequest = onDismiss) {
+        val options = listOf(
+            stringResource(R.string.dex_editor_plus) to onOpenDexEditorPlus,
+            stringResource(R.string.dex_editor) to onOpenDexEditorPlus,
+            stringResource(R.string.repair_dex_file) to onRepairDexFile,
+            stringResource(R.string.dex_property) to onShowDexProperty,
+            stringResource(R.string.dex2jar) to onOpenDexEditorPlus,
+            stringResource(R.string.dex2smali) to onOpenDexEditorPlus,
+            stringResource(R.string.decrypt_dex_strings) to onOpenDexStrings,
+            stringResource(R.string.translation_mode) to onOpenDexStrings
+        )
 
-    Dialog(onDismissRequest = onDismiss) {
         Surface(
             modifier = Modifier.fillMaxWidth().widthIn(max = 360.dp),
             shape = RoundedCornerShape(4.dp),

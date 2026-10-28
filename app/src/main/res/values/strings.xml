@@ -354,6 +354,7 @@
     <string name="zipalign_status_label">ZipAlign (4-byte):</string>
     <string name="pseudo_enc_status_label">Pseudo-Encryption Bit:</string>
     <string name="debuggable_status_label">Manifest Debuggable:</string>
+    <string name="toggle_read_edit_mode">Read-only / Edit Mode</string>
 </resources>
 
 

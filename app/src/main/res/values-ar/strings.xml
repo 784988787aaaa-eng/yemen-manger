@@ -354,6 +354,7 @@
     <string name="zipalign_status_label">محاذاة ZipAlign (4-byte):</string>
     <string name="pseudo_enc_status_label">بت التشفير الزائف (Bit 0):</string>
     <string name="debuggable_status_label">حالة التصحيح (Debuggable):</string>
+    <string name="toggle_read_edit_mode">وضع القراءة / التعديل</string>
 </resources>
 
 
